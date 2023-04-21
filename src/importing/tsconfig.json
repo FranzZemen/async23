@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "target": "ESNext",
+    "moduleResolution": "Node",
+    "tsBuildInfoFile": "../../out/buildInfo/importing.tsbuildinfo",
+    "declarationDir": "../../out/importing",
+    "outDir": "../../out/importing",
+  },
+  "include": ["**/*"]
+}
