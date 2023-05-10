@@ -11,4 +11,4 @@ The tutorial includes some statements of fact about node.js, JavaScript and Type
 be aware.  It also provides some code proofs or at least examples when encountering key concepts.  Finally, there 
 are a few opinionated statements, which will be explicitly called out.
 
-# [From CMS to JMS](./doc/cms-to-jms.md)
+# [From CMS to JMS](./doc/from-cms-to-jms.md)
