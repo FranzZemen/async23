@@ -56,29 +56,118 @@ Script file: ./package-json-no-inheritance.sh
 
 Failing sub-example: ./src/package-json/no-inheritance-fail
 
-- [package.json](./src/package-json/no-inheritance-fail/package.json)
+- [parent directory package.json](./src/package-json/no-inheritance-fail/package.json)
+- [child directory package.json](./src/package-json/no-inheritance-fail/sub-package/package.json)
 
 Passing sub-example: ./src/package-json/no-inheritance-pass
 
+- [parent directory package.json](./src/package-json/no-inheritance-pass/package.json)
+- [child directory package.json](./src/package-json/no-inheritance-pass/sub-package/package.json)
+
+Script output:
+
+```shell    
+--- START package.json does not support inheritance
+--- In the first project, a super directory package.json has type=module
+--- but the sub directory package.json does not have type=module
+--- The result is a run time exception pointing to the fact the .js module loading
+--- is inconsistent.
+
+(node:26659) Warning: To load an ES module, set "type": "module" in the package.json or use the .mjs extension.
+(Use `node --trace-warnings ...` to show where the warning was created)
+/home/franzzemen/dev/async23/src/package-json/no-inheritance-fail/sub-package/esm-import.js:1
+import {esmExport} from "./esm-export";
+^^^^^^
+
+SyntaxError: Cannot use import statement outside a module
+    at Object.compileFunction (node:vm:360:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1088:15)
+    at Module._compile (node:internal/modules/cjs/loader:1123:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1213:10)
+    at Module.load (node:internal/modules/cjs/loader:1037:32)
+    at Module._load (node:internal/modules/cjs/loader:878:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:81:12)
+    at node:internal/main/run_main_module:23:47
+
+Node.js v18.12.1
+---
+--- The second project adds type=module to the sub directory package.json
+--- The result is a pass with code properly running
+
+Code output --> module properly exported as esm due to nearest package.json type=module
+
+--- END package.json does not support inheritance^C
+franzzemen@penguin:~/dev/async23$ ./package-json-no-inheritance.sh
+--- START package.json does not support inheritance
+--- In the first project, a super directory package.json has type=module
+--- but the sub directory package.json does not have type=module
+--- The result is a run time exception pointing to the fact the .js module loading
+--- is inconsistent.
+
+(node:26678) Warning: To load an ES module, set "type": "module" in the package.json or use the .mjs extension.
+(Use `node --trace-warnings ...` to show where the warning was created)
+/home/franzzemen/dev/async23/src/package-json/no-inheritance-fail/sub-package/esm-import.js:1
+import {esmExport} from "./esm-export";
+^^^^^^
+
+SyntaxError: Cannot use import statement outside a module
+    at Object.compileFunction (node:vm:360:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1088:15)
+    at Module._compile (node:internal/modules/cjs/loader:1123:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1213:10)
+    at Module.load (node:internal/modules/cjs/loader:1037:32)
+    at Module._load (node:internal/modules/cjs/loader:878:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:81:12)
+    at node:internal/main/run_main_module:23:47
+
+Node.js v18.12.1
+---
+--- The second project adds type=module to the sub directory package.json
+--- The result is a pass with code properly running
+
+Code output --> module properly exported as esm due to nearest package.json type=module
+
+--- END package.json does not support inheritance
 ```
-Failing test
 
-```
+### The appearance of package.json inheritance
 
-```
+I have come across a couple of cases that can give the appearance of package.json inheritance. The first is with respect
+to module resolution in node.js in combination with self-referencing exports/imports and separately with respect to
+exports and imports
+declarations.
 
-in a parent directory package.json, and do not set type in a subdirectory package.json
-in project /src/package-json/no-inheritance-fail. Running
+#### Appearance of inheritance due to module resolution and self-referencing
 
-The effect of package.json in folder hierarchies is to reset the current package configuration.
+In the following example, lets assume that we have a package.json that exports everything through index.js. It stands to
+follow that any source in that package can import from the package name. (In fact if the exports contained a
+subdirectory
+export, source could import from the package name and the subdirectory name.)
 
-Within a code base both for source (typescript and javascript) and target (javascript)  there may be many package.json
-files. For this configuration file, the name must always be package.json. Inheritance works because when a configuration
-is needed, node and typescript look for the first instance of that configuration within a package.json file in the
-current file folder and work backwards from there. This can be confusing at first, but eventually becomes 2nd nature,
-and with the advent of more than just package descriptions, this feature is used in package management and deployment.
-Where possible a static definition is encouraged, but It can be necessary for a build step to create, copy or maleate a
-package.json.
+Let us also assume that the package.json does not define type=module, because for whatever reason we want some .js files
+to be commonjs modules and some esm modules. Normally we would simply use .cjs and .mjs extensions to distinguish the
+module loading required.
+
+But what if we could place a package.json at the root of the commonjs files with type=commonjs and one at the root of
+the esm files with type=module? Would that not give us what we are looking for? The answer is yes, sort of.
+
+Ah! we have inheritance of package.json! Not so fast. The answer is no.
+
+For JavaScript, and the entry point being the parent directory package, node.js encounters the exports and accesses that
+source directly.  In doing so it encounters the sub-direcgtory package.json
+
+There are two things happening at once. First, w
+
+While the configuration is different, the reason for tha illusion is the same.
+
+Self-referencing is the ability for a module to import itself. This is a useful technique in many cases. Instead of
+using relative imports, self-referencing allows a module to import/require from its own package name as if it was in
+node_modules, noting the nuances related to how this works depending on what the package exports.
+
+Typically
+
+For both commonjs and esm module loading, node.js will climb the directory tree to root to find the closest node_modules
+fora an imported package. Under certain circumstances, this can give the appearance of package.json inheritance.
 
 Example:  https://github.com/FranzZemen/asyn23.git
 tsconfig.json Inheritance
