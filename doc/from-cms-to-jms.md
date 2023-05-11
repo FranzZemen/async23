@@ -1,3 +1,60 @@
+# From CMS to JMS
+
+While ECMAScript is the language standard, there is no indication that CommonJS will be deprecated any time soon, and
+there may be many reasons to continue to use it. However, there are also many reasons to use ECMAScript modules, and the
+Node.js community is moving in that direction.
+
+This package is a tutorial that builds up to the objective of deploying TypeScript based code to node.js in both
+CommonJS and ECMAScript module formats using the same, unaltered Typescript code and no shims or wrappers.
+
+Franf
+
+## Which version of Typescript and Node.js?
+
+Partial compatibility with Node.js advancements, particularly consequences of the package.json exports options and with
+respect to variations in module, target and moduleResolution occurred somewhere within the 4.x versions, notably
+likely after 4.5. Full compatibility was experienced in the later versions around ~4.8 and resolved by ~4.9.
+Unfortunately, the online TypeScript documentation is not version specific, and the documentation is not always
+accurate until enough issues have been reported and resolved.
+
+While some combinations work in earlier versions, for the purposes of this blog it is assumed that typescript version is
+4.9+.
+
+For Node.js, the assumption is for support as of version 18, but version 16 supported many of the features. Node.js
+documentation is more accurate by version than typescript especially in the esoteric areas. Experience has shown that if
+Node.js documentation tied to a version said something, it did those things.  (The same is not true in my experience
+with the edges of typescript).
+What this blog posts covers
+In this blog and supporting Github examples we offer solutions for leveraging various typescript compiler options for
+the same distribution without writing compatibility coding, shims or other techniques leveraging purely the
+documentation in typescript, node.js and to some extent npm. This makes the resulting distribution accessible by all,
+whatever module loading and other settings the end user desires.
+
+The blog and code examples describe concepts lightly where needed, and more deeply where necessary to meet the needs of
+the casual user as well as those who like to understand the sausage making. However, this is not a blog about using
+node.js or typescript (or javascript for that matter). This is also not a blog on how to publish distributions. Where
+the blog does not go into detail it is assumed the reader either already knows or can easily find documentation on a
+topic.
+Pre-Requisites
+
+## Configuration File Inheritance
+
+Since we’re looking to setup code to support multiple target configurations, it's very important to fully understand our
+configuration files. tsconfig.json supports inheritance, while package.json does not. However, module resolution in node
+can appear to create package.json inheritance for some properties.
+
+### package.json Inheritance
+
+Package.json does not support inheritance.
+
+To prove this, we define a parent directory package.json with a type=module entry. We test with a subdirectory
+package.json that first does not contain a module entry and then with one that does. In both cases, the code is
+JavaScript attempting esm export/import. In stands to reason that if inheritance worked, the import in the parent
+package would work for the subdirecctory package in the first case.
+
+#### Example:  Prove that package.json does not support inheritance
+
+Script file: ./package-json-no-inheritance.sh
 
 Failing sub-example: ./src/package-json/no-inheritance-fail
 
@@ -98,7 +155,7 @@ the esm files with type=module? Would that not give us what we are looking for? 
 Ah! we have inheritance of package.json! Not so fast. The answer is no.
 
 For JavaScript, and the entry point being the parent directory package, node.js encounters the exports and accesses that
-source directly.  In doing so it encounters the sub-direcgtory package.json
+source directly. In doing so it encounters the sub-direcgtory package.json
 
 There are two things happening at once. First, w
 
