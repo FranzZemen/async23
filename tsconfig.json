@@ -2,6 +2,6 @@
   "files": [],
   "include": [],
   "references": [
-    {"path": "./src/importing/tsconfig.json"},
+    {"path": "./examples/typescript/target-module-resolution/src/es3.commonjs.node.json"},
   ]
 }

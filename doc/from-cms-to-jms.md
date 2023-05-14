@@ -74,12 +74,18 @@ For the rest of the tutorial we are going to introduce some shortcut abbreviatio
 
 #### Important properties `mjs` modules:
 
-- `import` is used to load a module
+- `import` is used to load an `esm` or `cjs` module. Node.js does its best to resolve to the correct
+  export, but there are times when this does not work (see `require` below), depending on historical
+  practices with module.exports in `.cjs` modules. [Example]().
 - `export` is used to export from a module
 - module loading is asynchronous, all declared non-dynamic imports must be defined at the top of the
   module and the asynchronous behavior allows for `await` at the top of the module
 - dynamic import can be used anywhere in code and can be done conditionally, but asynchronously
   (same as `cjs` modules)
+- There are tia `require`function can be created through `module.createRequire` to load `cjs`
+  modules. There are times when this is necessary, and it allows for dynamic, inline loading
+  of `cjs`
+  modules.  [Example]().
 - `import` can be used to import both `cjs` and `mjs` modules
 - may have the extension '.js' if the package.json type is 'module', otherwise must have the
   extension '.mjs'
@@ -96,12 +102,38 @@ these are the main ones that are important to this tutorial.
 
 - `.cts` and `.mts` transpile to `.cjs` and `.mjs` respectively
 - Whether TypeScript transpile `.js` files to `cjs` depends on a couple factors defined in [TBD]()
+- Beyond any JavaScript issues, using `import` for `cjs` modules can have issues with typings.  
+  That is another time when `module.createRequire` is useful.
 - When using dynamic import `import`, one can import types with an `import type` statement which is
   removed at transpilation time, allowing for typings while coding and proper behavior at run
   time. [Example]().
 - Use `ts` and `.js` extensions at the very least when you are writing code that can run on the
   client and server and leverage the package.json `type` field to inform Node.js. [Example]().
 - Always use file extensions in imports for non-packages
+
+## Usage of `.js`/`.ts`, `.cjs`/`.cts` and `.mjs`/`.mts` extensions
+
+One motivation for this tutorial is to continue to use `.js` and more importantly `.ts` extensions
+and share that source without concern as to where it is used (client side, `esm` or `cjs`).
+
+Node.js documents a known risk with taking this approach for dual repos. A client could
+inadvertently use both the `cjs` and `esm` versions of a package, and the behavior would be
+potentially unpredictable. At the very least, module level state (var, let, const) could be
+different between the two.
+
+This tutorial rationalizes this risk as follows. If two different libraries leverage a dual package
+through `cjs` and `esm` respectively, the internal state of each and that of the client which may be
+using one or the other should not matter in most cases if inner package exports are not
+re-exported (doing so is rare). The documentation of the library in question (the client in this
+case) should clearly state that the library is dual and that the client should not use both.
+
+The recommendation to use `.js` and `.ts` extensions is a recommendation only. You can still use the
+principles of this tutorial and write only `.cjs` and `.mjs` files.
+
+Remembering that irrespective of package.json `type` field setting `.cjs` and `.mjs` files are
+always module loaded per their extension. There are times when writing code you may want to actually
+enforce one or the other regardless of the surrounding package.json `type` field setting, and that's
+fine. JavaScript will even allow for an inline require within a `esm` loaded module.
 
 ## tsconfig.json Inheritance
 
@@ -132,7 +164,8 @@ As far as Node.js is concerned, a package defined by a package.json file applies
 to all files/folders from the current one to the next package.json file.
 
 Code that is in a child package may not refer to code in a parent package, i.e. one cannot import
-from further up than one's own package.json file location. [Example]()
+from further up than one's own package.json file location. However, code in a parent package may
+access code in a child package [Example]().
 
 #### Implications of nested package.json files
 
@@ -146,26 +179,121 @@ Module loading on the other hand doesn't work the way package.json works. If you
 module loading algorithms, a module from another package import is resolved by searching for the
 module recursively up through node_modules subdirectories of parent directories all the way back to
 root, or it discovers it is within a node_modules directory itself. A relative module is resolved
-from the package.json root director down, but not further up.
+from the package.json root down, but not further up. The presence of new package.json files does not
+inhibit relative imports. [Example]()
 
-#### Implications of module loading algorithms
+#### Implications of module resolution algorithms
 
 Say you have code in a parent package that is contains `type=module` in its package.json file.  
 Say further that some code in that parent package loads code in a child package that contains
 `type=commonjs` in its package.json file. The code in the parent package will load the child not as
-an `esm` module, but as a `cjs` module. This is because of the configuration of the child 
-package, remembering that a package is defined by the nearest package.json file.  The 
-interesting thing here is that the child package can define how its `.js` files are loaded, but 
-it doesn't prevent the parent package from loading it! This is a powerful feature that we will 
-leverage later on, when we look at package exports and imports.
+an `esm` module, but as a `cjs` module. This is because of the configuration of the child package,
+remembering that a package is defined by the nearest package.json file. The interesting thing here
+is that the child package can define how its `.js` files are loaded, but it doesn't prevent the
+parent package from loading it! This is a powerful feature that we will leverage later on, when we
+look at package exports and imports.
 
-## Important tsconfig.json compiler options
+## exports and imports
+
+If you're only attempting leveraging exports and imports from TypeScript 4.9 onwards (or
+thereabouts), consider yourself lucky. Earlier versions were not consistent with node.js package.
+json changes, nor was the documentation clear. There were also bugs, such as the insertion of
+`export {}`into .cjs from transpilation of .cts, which was considered a "feature" at the time.
+
+`exports` and `imports` were in very much the same way.  `exports` is for the outside world,
+while `imports` is for the inside world, i.e. the package. The package can also import using
+self-referencing.
+
+| Feature                               | exports | imports | 
+|---------------------------------------|---------|---------|
+| can begin with conditional expression |         |         |
+|                                       |         |         |
+|                                       |         |         |
+
+The node.js and TypeScript documentation do a good job of explaining exports and imports, with a
+logical path mapping to a physical path relative to the package.json file, potential with a
+conditional mapping in the mix.
+
+One quirk is that exports have no effect in relative imports that cross package lines. They only
+take effect in the context of an installed node_modules dependency. This is a quirk because it is
+not consistent with the `type`
+field, which does have an effect on relative imports that cross package lines.
+
+This quirk can cause issues, because it means that exports and imports are not of use until the
+package is installed. This quirk will show up as an issue later in this tutorial.
+
+## Important tsconfig.json and package.json compiler options for dual repos
+
+When troubleshooting target, module and moduleResolution compiler options, it is important to
+remember that the runtime result will always behave according to Node.js documented rules. If
+something throws a module not found error or similar, its because `tsc` is transpiling something
+inconsistent.
+
+`target` compilerOption:  responsible for the generated JavaScript to language specification, but
+does not insert module loading related code (i.e. the transpilation of `import` and `export`
+statements).
+
+It is important to remember that it defaults to es3 at least for TypeScript 4.9 and earlier. Also,
+interestingly while `esm` module loading was not available when es3 was predominant, it is possible
+to use `esm` module loading with es3 target, based on settings below.
+
+`module` compilerOption: responsible for the generated `.js` from `.ts` `import` and `export`
+statements.  `.cts` and `.mts` will always result `.cjs` and `.mjs` respectively with module loading
+governed by the convention on those extensions (i.e. the code you write). Note that in this tutorial
+we ignore `amd`, `umd` and `system`module loading.
+
+A setting of anything other than `commonjs`, `Node16` or `NodeNext` will result `esm` module
+loading, i.e. `import` and `export` statements, including if the original language spec and Node. js
+at the time did not support it (see comment above on es3). Typescript ignores the package.json`type`
+field, which if set to `commonjs` will cause a runtime error.
+
+A setting of `commonjs` will always result in `cjs` module loading, i.e. `require`
+and `module. exports`. Typescript ignores the package.json `type` field, which if set to
+`module` will cause a runtime error.
+
+A setting of `Node16` or `NodeNext` will result in either `esm` or `cjs` module loading, and here
+the TypeScript compiler will look to the package.json `type` field to determine which, remembering
+that its absense implies `commonjs`.
+
+Note that a value of `Node16`or  `NodeNext` will _not_ result in node.js package.json features such
+as project self-referencing being recognized by the typescript compiler (as of 4.9). It simply
+influences the generated code for module loading.
+
+`moduleResolution` compilerOption: responsible for allowing TypeScript to recognize the package.
+json advanced features such as project self-referencing. As far as can be seen, that's pretty much
+its only use. It does not affect the generated code at all. One might think that the TypeScript
+engineers would have been better off simply detecting what was in package.json, and providing
+automatic compatibility. The documentation says "'node16' or 'nodenext' for Node.js’ ECMAScript
+Module Support from TypeScript 4.7 onwards", however as far as I can tell tsc supports `.cts` 
+and `.mts` and `esm` module loading without this moduleResolution setting.
+
+`esModuleInterop` compilerOption: allows TypeScript code to use `import` to load `cjs` modules 
+in `esm` modules.  Without it, one has to create a require function using module.createRequire, 
+which itself creates non-portable code.  There are times when this is still necessary, as 
+TypeScript cannot infer all cases to `import` from a `cjs` module. Given that there is no harm 
+done in using this compilerOption, it is recommended to always use it for cleaner code.
+
+### Recommendations
+
+| Purpose      | target |     module     | moduleResolution |      esModuleInterop       |        package.json type         |
+|--------------|:------:|:--------------:|:----------------:|:--------------------------:|:--------------------------------:|
+| script       | EsNext | None or ESNext | None or NodeNext |            true            | module (if package.json present) |
+| node library | EsNext |    NodeNext    |     NodeNext     |            true            |              module              |
+| web          | ESNext |     ESNext     |       Node       | true if `cjs` is supported |              module              |
 
 
 
-This is a powerful feature that we will use later.
 
-Combined with the rules on package.json, this means that if one loads
+
+
+Typescript transpiles imports based on a couple of settings.
+
+This is the job of the `module`
+compiler option (well, partly)
+
+This tutorial demonstrates how to publish to npm with dual repos, one for `cjs` and one for
+`esm`. It also shows how to publish additional configurations. It does so without shims or wrappers,
+allowing you to write code once and use it many times with a `.js` extension.
 
 - Practical points of commonjs vs ECMAScript modules
 
@@ -197,33 +325,7 @@ dist ─┬─ package.json
 
 
 
-## Which version of Typescript and Node.js?
 
-Partial compatibility with Node.js advancements, particularly consequences of the package.json
-exports options and with respect to variations in module, target and moduleResolution occurred
-somewhere within the 4.x versions, notably likely after 4.5. Full compatibility was experienced in
-the later versions around ~4.8 and resolved by ~4.9. Unfortunately, the online TypeScript
-documentation is not version specific, and the documentation is not always accurate until enough
-issues have been reported and resolved.
-
-While some combinations work in earlier versions, for the purposes of this blog it is assumed that
-typescript version is 4.9+.
-
-For Node.js, the assumption is for support as of version 18, but version 16 supported many of the
-features. Node.js documentation is more accurate by version than typescript especially in the
-esoteric areas. Experience has shown that if Node.js documentation tied to a version said something,
-it did those things.  (The same is not true in my experience with the edges of typescript). What
-this blog posts covers In this blog and supporting Github examples we offer solutions for leveraging
-various typescript compiler options for the same distribution without writing compatibility coding,
-shims or other techniques leveraging purely the documentation in typescript, node.js and to some
-extent npm. This makes the resulting distribution accessible by all, whatever module loading and
-other settings the end user desires.
-
-The blog and code examples describe concepts lightly where needed, and more deeply where necessary
-to meet the needs of the casual user as well as those who like to understand the sausage making.
-However, this is not a blog about using node.js or typescript (or javascript for that matter). This
-is also not a blog on how to publish distributions. Where the blog does not go into detail it is
-assumed the reader either already knows or can easily find documentation on a topic. Pre-Requisites
 
 ## Configuration File Inheritance
 
