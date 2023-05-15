@@ -222,6 +222,8 @@ field, which does have an effect on relative imports that cross package lines.
 This quirk can cause issues, because it means that exports and imports are not of use until the
 package is installed. This quirk will show up as an issue later in this tutorial.
 
+### Did you know that you can export `.ts` files?
+
 ## Important tsconfig.json and package.json compiler options for dual repos
 
 When troubleshooting target, module and moduleResolution compiler options, it is important to
@@ -264,14 +266,14 @@ json advanced features such as project self-referencing. As far as can be seen, 
 its only use. It does not affect the generated code at all. One might think that the TypeScript
 engineers would have been better off simply detecting what was in package.json, and providing
 automatic compatibility. The documentation says "'node16' or 'nodenext' for Node.js’ ECMAScript
-Module Support from TypeScript 4.7 onwards", however as far as I can tell tsc supports `.cts` 
+Module Support from TypeScript 4.7 onwards", however as far as I can tell tsc supports `.cts`
 and `.mts` and `esm` module loading without this moduleResolution setting.
 
-`esModuleInterop` compilerOption: allows TypeScript code to use `import` to load `cjs` modules 
-in `esm` modules.  Without it, one has to create a require function using module.createRequire, 
-which itself creates non-portable code.  There are times when this is still necessary, as 
-TypeScript cannot infer all cases to `import` from a `cjs` module. Given that there is no harm 
-done in using this compilerOption, it is recommended to always use it for cleaner code.
+`esModuleInterop` compilerOption: allows TypeScript code to use `import` to load `cjs` modules
+in `esm` modules. Without it, one has to create a require function using module.createRequire, which
+itself creates non-portable code. There are times when this is still necessary, as TypeScript cannot
+infer all cases to `import` from a `cjs` module. Given that there is no harm done in using this
+compilerOption, it is recommended to always use it for cleaner code.
 
 ### Recommendations
 
@@ -281,35 +283,144 @@ done in using this compilerOption, it is recommended to always use it for cleane
 | node library | EsNext |    NodeNext    |     NodeNext     |            true            |              module              |
 | web          | ESNext |     ESNext     |       Node       | true if `cjs` is supported |              module              |
 
+## Putting it all together - deploying dual (or more) packages
+
+At this point it may be clear that deploying dual packages involves leveraging conditional exports.
+Coming from typescript, we can easily generate the appropriate target for require and import.
+
+We also know that the default package.json node behavior is to assume `cjs` module. At this point we
+realize that with one package.json over a distribution, we cannot achieve a dual deployment, since
+node.js will _always_ result in `cjs` OR `esm`.
+
+So its seems that one solution means that we will need to wrap our code with either `.cts`
+or  `.mts` files, which enforce the other condition. Of course, due to what we learned, the choice
+is to wrap the code with `.mts`, generating `.mjs` wrappers, since `.mjs` files can load both
+`cjs` without the use of dynamic `import()` statements.
+
+Not so fast. There is a better way. We also know that a package.json impacts module loading for all
+code at its level down - whether it is a deployed package, and that exports paths transcend
+sub-packages (you can export child code from a parent package).
+
+With this knowledge, we can defer the setting of the package.json `type` field to the last possible
+level, right before the destination source:
+
+In preparing our package for deployment, we create a deployment package as usual with an incremental
+version. Common practice is simply to copy the repos' package.json with a new version number, but
+this is _common practice_ only. In fact, you probably already massage that package.json, for example
+removing scripts or bin entries that matter only for development.  (You should also take the
+opportunity to remove all devDependencies entries and anything else you don't want in the published
+version).
+
+Our distribution package.json will not have a `type` field. This means that any code in its package
+will be commonjs, i.e. `cjs`   module loading. But we will not put our code there.  
+Instead, we will define two sub-packages, one for `cjs` and one for `esm`. For each of these, we
+only need one property:  `type`, set to the appropriate value. We already know this will force code
+at those levels to be `esm` or `cjs` respectively.
+
+In our distribution package.json, we will set whatever exports we want under the conditional module
+loading sub-paths. There are so many options...
+
+- We can say that require and import always result in loading their respective generate index.js,
+  where everything is necessary is exported from the codebase.
+- We can be more specific in what modules require and import can load.
+- We can be specific about what modules can be loaded and then pass through require and import
+  conditions.
+- etc.
+- ** We can also define new distribution logical paths to export additional targets **. For example
+  say my default distribution for `esm` is generated from `"module"="esnext"`,
+  `"target"="esnext"`, `"moduleResolution"="Node"` and for `cjs` is generated from
+  `"module"="commonjs"`, `"target"="esnext"`, `"moduleResolution"="NodeNext"`, then these would map
+  to my code in the `esm` and `cjs` sub-packages respectively. But say I also wanted to target a
+  very backward `es3` target. In that case I could have an `exports` entry called
+  `./es3` and target that with conditional imports and exports.
+
+The distribution scaffolding would look something like this:
+
+```` 
+dist ─┬─ package.json  [Distribution package.json, with no type field, but appropriate exports]
+      │
+      ├─ cjs ─┬─ package.json [Output folder for commonjs transpiled code]
+                 types ─┬─ index.d.ts
+      │          index.js
+      │
+      ├─ mjs ─┬─ package.json [Output folder for esm transpiled code, package.json contains "type"="module]  
+      │
+                 index.js
+      ├─ es3  ─┬─ cjs ...
+               ├─ mjs ...
+      ├─ bin  ─┬─ mjs (supports only mjs 
+     
+````
+
+### Development Consequences
+
+If you have a simple project where all your code uses relative imports, you don't need any 
+exports in your repos package.json. 
+
+You will however need to choose whether your repos package.json will be `cjs` or `esm` for 
+development purposes.  You can use the lessons in this tutorial along with symbolic links to 
+create a dev environment that supports both ... but there is little benefit to doing so and it 
+is overly complex Instead, see testing consequences.
+
+#### Using self-reference imports or #imports sub-paths
+
+There are times when you may prefer to use self-referencing imports or #imports entries.  For 
+example, you may have a `bin` folder in your package.json at the same level as the rest of your 
+generated code.  Leveraging either self-reference imports or #import entries makes things clean:
+
+````typescript
+import {api} from 'my-package/bin';
+````
+Package.json entry for development:
+
+````json
+{
+  "exports": {
+    "./bin": {
+      "types": "./dist/bin/types/index.d.ts",
+      "default": "./dist/bin/index.mjs"
+    }
+  }
+}
+````
+
+Package.json entry for distribution
+
+````json
+{
+  "exports": {
+    "./bin": {
+      "types": "./bin/types/index.d.ts",
+      "default": "./bin/index.mjs"
+    }
+  }
+}
+````
+
+Using this technique, however, requires a successful tsc compile so that the self-reference 
+works.  This is usually not a problem with auto-compile IDE settings.  But there is a better way:
+
+````json
+{
+  "exports": {
+    "./bin": {
+      "default": "./bin/index.mts"
+    }
+  }
+}
+````
+
+TypeScript can understand exports that point to TypeScript, negating the need for a successful 
+compile.
 
 
 
+### Testing consequences
 
-
-Typescript transpiles imports based on a couple of settings.
-
-This is the job of the `module`
-compiler option (well, partly)
-
-This tutorial demonstrates how to publish to npm with dual repos, one for `cjs` and one for
-`esm`. It also shows how to publish additional configurations. It does so without shims or wrappers,
-allowing you to write code once and use it many times with a `.js` extension.
-
-- Practical points of commonjs vs ECMAScript modules
-
-- tsconfig.json inheritance
-- package.json overrides & module loading impacts
-- important TypeScript compiler options for this topic
-  - target
-  - module
-  - moduleResolution
-  - allowSyntheticDefaultExports
-  - esModuleInterop (enables allowSyntheticDefaultExports)
--
 
 ## The end result (one version, at least)
 
-If you don't care about the details or the optionality of what one can do, and just want to setup a
+If you don't care about the details or the optionality of what one can do, and just want to set up a
 dual repos quickly as possible, this section is for you.
 
 Setup your build system to result in the following distribution scaffolding as follows:
@@ -323,26 +434,7 @@ dist ─┬─ package.json
       │
       ├─ test
 
-
-
-
-
-## Configuration File Inheritance
-
-Since we’re looking to setup code to support multiple target configurations, it's very important to
-fully understand our configuration files. tsconfig.json supports inheritance, while package.json
-does not. However, module resolution in node can appear to create package.json inheritance for some
-properties.
-
-### package.json Inheritance
-
-Package.json does not support inheritance.
-
-To prove this, we define a parent directory package.json with a type=module entry. We test with a
-subdirectory package.json that first does not contain a module entry and then with one that does. In
-both cases, the code is JavaScript attempting esm export/import. In stands to reason that if
-inheritance worked, the import in the parent package would work for the subdirecctory package in the
-first case.
+````
 
 #### Example:  Prove that package.json does not support inheritance
 
