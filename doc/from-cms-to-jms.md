@@ -3,28 +3,58 @@
 While ECMAScript is the language standard, there is no indication that CommonJS will be deprecated
 any time soon, and there may be many reasons to continue to use it. However, there are also many
 reasons to use ECMAScript modules, and the Node.js community is moving in that direction. Node.js's
-own documentation says
+own documentation says:
 
 ```
 ECMAScript modules are the official standard format to package JavaScript code for reuse.
 ```
 
-This package is a tutorial that builds up to the objective of deploying TypeScript based code to
-node.js in both CommonJS and ECMAScript module formats using the same, unaltered Typescript code and
-no shims or wrappers. The tutorial does not provide a build tool to integrate with. The concepts are
-straight forward and can be brought to any task runner or build system.
+At the same time, Node.js's default package behavior for `.js` files is CommonJS...so currently
+committed to both approaches.
 
-Beyond this, the information consolidated in this package will enable multiple distributions within
-a given deployed package, and provide interesting scaffolding options.
+This tutorial explores the nuanced details in going from CommonJS modules, (henceforth referred to
+as `cms` (no ".") to ECMAScript modules (hereforth referred to as `ems`, from a Typescript
+perspective. To provide some structure we do that by setting the objective of deploying to both
+CommonJS and ECMAScript modules, but with a caveat - using only one TypeScript codebase, with no
+shims or proxy code.
 
-If you only code in JavaScript, this tutorial will also benefit in terms of deploying dual (or more)
-repos.
+A small note:  Web browsers already use `esm` module loading. Packagers such as Webpack make this
+transparent to the developer.
+
+## A note on build tooling
+
+For the purposes of this tutorial, the package presents no sophisticated build tooling, given
+everyone uses something different. Typical operations in this tutorial are transpilation, file
+copying, and package.json manipulation (which we do by storing and copying the transformed version
+for the examples at hand). Using this approach will keep the examples simple and easy to follow.
+
+## A note on deploying dual packages
+
+Node.js documentation warns against deploying dual packages from one codebase. The obvious reason is
+that should a given client use both packages, any module level state will not be shared between
+`cjs` and `esm` modules - as far as Node is concerned they are completely different modules.
+
+The two documented alternatives is to have `.cjs` and `.mjs` entry points (but that leaves some
+quirks to the implementation behind the scenes), or simply to have the `esm` part of the package
+implemented `cjs` modules, proxied by `.esm` wrappers.
+
+I find both alternatives distasteful. First `.cjs` and `.mjs` are node specific constructs at the
+moment, and I tend to want to write portable code (to the web). Second, I don't like the proxy-fix
+solution. I can't get TypeScript to auto generate that, meaning I have to have a codebase for it.
+
+The true dual package solution from the same code simply requires discipline and the willingness
+that in very rare cases a deep dependency might be using the 'other' module loader for the same
+package AND that the deep dependency is using module level state AND that state is different AND
+that state conflict matters. I can live with that; if you prefer other methods the above
+alternatives are there and this tutorial still applies.
 
 ## Pre-requisites
 
-The version of node should cover the functionality from node desired. Typically, that means node
-16+, but recommend node 18+ as of this writing (April 2023). Node is fairly good about release
-updated documentation with, or very closely with software.
+The version of node should cover the functionality from node desired. Except for the oldest of
+legacy projects this should not an issue as current stable version is 18+. We'll also see that
+proper module and moduleResolution settings make code version proof to future Node releases.  
+For legacy projects, advanced package.json features began appearing around Node 16 and you're out of
+luck for those features if you are using something earlier.
 
 The version of Typescript recommend is at 4.9+ to ensure NodeJS 18+ compatibility. Earlier
 versions (for example 4.6) did not fully enable some of the features, and the documentation lagged
@@ -32,7 +62,8 @@ for severa minor versions. However, 4.9 is "golden" on the integration and docum
 
 If you're not familiar with TypeScript composite projects, it is strongly recommended you
 familiarize yourself. There are several advantages to composite project not the least of which is to
-easily transpile multiple things within a repository.
+easily transpile multiple subprojects within a repository, however this topic is beyond the scope of
+the tutorial.
 
 It's recommended to get familiar with the following Node documentation chapters before or after
 reading this tutorial. Much of the information there is repeated here in some manner, but those
@@ -46,70 +77,82 @@ The following TypeScript documentation page is also an important read:
 
 - [ECMAScript Modules in Node.js](https://www.typescriptlang.org/docs/handbook/esm-node.html)
 
-### Review of CommonJS and ECMAScript Modules
+## Review of CommonJS and ECMAScript Modules
 
 For the rest of the tutorial we are going to introduce some shortcut abbreviations:
 
-- CommonJS modules will be referred to as `cjs`, and files explicitly coded to be CommonJS will be
-  referred to by their defined extension, `.cjs`
-- ECMAScript modules will be referred to as `esm`, and files explicitly coded to be ECMAScript
-  modules will be referred to by their defined extension, `.mjs`
+| Phrase                                  | Abbreviation Used |
+|-----------------------------------------|:-----------------:|
+| CommonJS Module Loading/Loader/Loaded   |        cjs        |
+| ECMAScript Module Loading/Loader/Loaded |        esm        |
+| Node.js 'always' cjs file extension     |       .cjs        |
+| Node.js 'always' mjs file extension     |       .mjs        |
 
-#### Important properties `cjs` modules:
+Node.js introduced two typescript file extensions, `.cjs` and `.mjs`. The `.cjs` extension must
+always implement a `cjs` module, and likewise the `.mjs` extension must always implement an
+`esm` module or a run time error will be produced.
 
-- `require` is used to load a module
-- `module.exports` is used to export from a module, noting that assigning a property to exports vs
-  assignment of exports itself is not the same thing, one is exporting a particular property, and
-  the other is exporting the default export, which has consequences on import
-- `exports` is a shorthand for `module.exports`
-- module loading and the call to `require` is synchronous
-- `require` can be used anywhere in code and can be done conditionally
-- `cjs` modules cannot directly load `esm` modules, but can load them asynchronously through a
-  dynamic import (more on that later with TypeScript implications)
-- may have the extension '.js' if the package.json type is 'commonjs', otherwise must have the
-  extension '.cjs'
-- the `__dirname` and `__filename` properties are available in the module scope
-- there is a `module` object in module scope
-- `require` can directly load `.json' files
+Typescript will properly transpile the corresponding `.cts` and `.mts` files to the correct output.
 
-#### Important properties `mjs` modules:
+`.js` files are ambiguous and can be either `cjs` or `esm` modules, and interpreted depending on the
+code the contain to import and export modules, among other things. Thus the `.ts` is also ambiguous.
+TypeScript, however as of v4.9, does not always provide compilation errors, as we'll see later, even
+if the `module` compilerOption conflicts with the configured `package. json`.
 
-- `import` is used to load an `esm` or `cjs` module. Node.js does its best to resolve to the correct
-  export, but there are times when this does not work (see `require` below), depending on historical
-  practices with module.exports in `.cjs` modules. [Example]().
-- `export` is used to export from a module
-- module loading is asynchronous, all declared non-dynamic imports must be defined at the top of the
-  module and the asynchronous behavior allows for `await` at the top of the module
-- dynamic import can be used anywhere in code and can be done conditionally, but asynchronously
-  (same as `cjs` modules)
-- There are tia `require`function can be created through `module.createRequire` to load `cjs`
-  modules. There are times when this is necessary, and it allows for dynamic, inline loading
-  of `cjs`
-  modules.  [Example]().
-- `import` can be used to import both `cjs` and `mjs` modules
-- may have the extension '.js' if the package.json type is 'module', otherwise must have the
-  extension '.mjs'
-- the __dirname and __filename are not available in the module scope, but can be imported from
-  the `import.meta` object
-- to load `.json` files, an assert clause must be used (see Node.js documentation)
-- imports that are not packages require the file extension, for example `import { foo } from
-  './foo.js'` vs `import { foo } from './foo'`
+## Important properties `cjs` and `esm` modules
 
-There are other properties and differences between `cjs` and `esm` modules documented by Node.js,
-these are the main ones that are important to this tutorial.
+TypeScript takes care of the transpilation of `.cts` modules and `.ts` modules to `cjs`
+(when `.ts` is configured to produce `cjs` modules), and similarly for `.mts` and `.ts` modules (
+when `.ts` is configured to produce `esm` modules).
 
-#### TypeScript Implications
+That said, it is important to understand some of the key properties of these module types in the
+Node.js world.
 
-- `.cts` and `.mts` transpile to `.cjs` and `.mjs` respectively
-- Whether TypeScript transpile `.js` files to `cjs` depends on a couple factors defined in [TBD]()
-- Beyond any JavaScript issues, using `import` for `cjs` modules can have issues with typings.  
-  That is another time when `module.createRequire` is useful.
-- When using dynamic import `import`, one can import types with an `import type` statement which is
-  removed at transpilation time, allowing for typings while coding and proper behavior at run
-  time. [Example]().
-- Use `ts` and `.js` extensions at the very least when you are writing code that can run on the
-  client and server and leverage the package.json `type` field to inform Node.js. [Example]().
-- Always use file extensions in imports for non-packages
+| Property                                                          |                        `cjs`                         |                         `esm`                         |
+|-------------------------------------------------------------------|:----------------------------------------------------:|:-----------------------------------------------------:|
+| Import Statements                                                 |                       require                        |                        import                         |
+| Export Statements                                                 |            module.exports[.blah] = [blah]            |                   export [{[blah]}}                   |
+| Import is Synchronous                                             |                         Yes                          |                          No                           |
+| Top Level `await`                                                 |                          No                          |                          Yes                          |
+| Loading `cjs` modules                                             |                 require or import()                  |           import, createRequire or import()           |
+| Loading `esm` modules                                             |                       import()                       |                  import or import()                   |
+| Conditional imports (anywhere in code)                            | require or import() for `cjs`<br/>import() for `esm` |                     import() only                     |
+| __dirname, __filename etc                                         |                         Yes                          |                          No                           |
+| import.meta                                                       |                          No                          |                          Yes                          |
+| default for `.js` if package.json `types` does not specify        |                         Yes                          |                          No                           |
+| JSON imports                                                      |        const package = require('[blah].json`)        | import package from '[blah].json] assert{type:'json'} |
+| Requires relative imports use file extension `.js`, `cjs`, `.mjs` |                       Optional                       |                       Required                        |
+
+### TypeScript Implications
+
+Always try to use `import` in TypeScript. The compilerOption `esModuleInterop` will often
+automatically allow that syntax in TypeScript when importing `cjs` modules for both default and
+named exports.
+
+There are legacy cases where the module.exports conventions are violated, potentially re-mapping
+exports for example. In those cases, TypeScript (and JavaScript) will require the use of the
+module.createRequire function, which provides a require function to load`cjs` modules. In practice,
+Lif you an import error it will likely mean you should use this technique. If it still fails, there
+are other issues with your code or environment.
+
+The notion that `cjs` modules cannot load `esm` modules is not entirely true.  `cjs` can load
+`esm` through the dynamic import() function. Types can be defined using `import type {blah} from '
+blah'` for static typings, and with this line of code removed during compilation. Note that the 
+same can be done in `esm` modules to create conditional imports.
+
+Using `.ts` extensions is more portable than using `.cts` or `.mts` extensions. This requires 
+consideration of the package `type` property, along with the `module` and 
+`moduleResolution` compilerOptions (further discussed laterCR).
+
+### __dirname and __filename
+
+The module object in `esm` can be used to obtain the file URL and thus the derive the same 
+`__dirname` and `filename` properties as `cjs` modules. Another 'technique' is to create a 
+collocated __dirname.cjs and __filename.cjs in the current folder where needed, export the value 
+and import it into the `esm` module. This is a hack, but it works and providing it here to show 
+how we can use different module types to achieve various effects.
+
+
 
 ## Usage of `.js`/`.ts`, `.cjs`/`.cts` and `.mjs`/`.mts` extensions
 
@@ -354,23 +397,24 @@ dist ─┬─ package.json  [Distribution package.json, with no type field, but
 
 ### Development Consequences
 
-If you have a simple project where all your code uses relative imports, you don't need any 
-exports in your repos package.json. 
+If you have a simple project where all your code uses relative imports, you don't need any exports
+in your repos package.json.
 
-You will however need to choose whether your repos package.json will be `cjs` or `esm` for 
-development purposes.  You can use the lessons in this tutorial along with symbolic links to 
-create a dev environment that supports both ... but there is little benefit to doing so and it 
-is overly complex Instead, see testing consequences.
+You will however need to choose whether your repos package.json will be `cjs` or `esm` for
+development purposes. You can use the lessons in this tutorial along with symbolic links to create a
+dev environment that supports both ... but there is little benefit to doing so and it is overly
+complex Instead, see testing consequences.
 
 #### Using self-reference imports or #imports sub-paths
 
-There are times when you may prefer to use self-referencing imports or #imports entries.  For 
-example, you may have a `bin` folder in your package.json at the same level as the rest of your 
-generated code.  Leveraging either self-reference imports or #import entries makes things clean:
+There are times when you may prefer to use self-referencing imports or #imports entries. For
+example, you may have a `bin` folder in your package.json at the same level as the rest of your
+generated code. Leveraging either self-reference imports or #import entries makes things clean:
 
 ````typescript
 import {api} from 'my-package/bin';
 ````
+
 Package.json entry for development:
 
 ````json
@@ -397,8 +441,8 @@ Package.json entry for distribution
 }
 ````
 
-Using this technique, however, requires a successful tsc compile so that the self-reference 
-works.  This is usually not a problem with auto-compile IDE settings.  But there is a better way:
+Using this technique, however, requires a successful tsc compile so that the self-reference works.
+This is usually not a problem with auto-compile IDE settings. But there is a better way:
 
 ````json
 {
@@ -410,13 +454,10 @@ works.  This is usually not a problem with auto-compile IDE settings.  But there
 }
 ````
 
-TypeScript can understand exports that point to TypeScript, negating the need for a successful 
+TypeScript can understand exports that point to TypeScript, negating the need for a successful
 compile.
 
-
-
 ### Testing consequences
-
 
 ## The end result (one version, at least)
 
