@@ -14,12 +14,21 @@ committed to both approaches.
 
 This tutorial explores the nuanced details in going from CommonJS modules, (henceforth referred to
 as `cms` (no ".") to ECMAScript modules (hereforth referred to as `ems`, from a Typescript
-perspective. To provide some structure we do that by setting the objective of deploying to both
-CommonJS and ECMAScript modules, but with a caveat - using only one TypeScript codebase, with no
-shims or proxy code.
+perspective, in Node.js. To provide some structure we do that by setting the objective of deploying
+to both CommonJS and ECMAScript modules. As part of the exercise, we'll seek to understand support
+for package features in Node.js and TypeScript.
 
-A small note:  Web browsers already use `esm` module loading. Packagers such as Webpack make this
-transparent to the developer.
+## What you'll know after this tutorial
+
+- Differences between commonjs and esm modules, and how to interoperate between these module systems
+  at will
+- A clear understanding of compilerOptions target, module and moduleResolution that will enable you
+  to combine them in seemingly infinite ways to achieve your objectives without guessing
+- The ins and outs of package.json and how it impacts modules, module loading, as well as how it can
+  help you design code bases including optionality on where your test files go.
+- An appreciation for dynamic imports
+- Leveraging imports, exports and self-referencing
+- Building dual packages/packages with multiple target/module/moduleResolution combinations
 
 ## A note on build tooling
 
@@ -38,9 +47,11 @@ The two documented alternatives is to have `.cjs` and `.mjs` entry points (but t
 quirks to the implementation behind the scenes), or simply to have the `esm` part of the package
 implemented `cjs` modules, proxied by `.esm` wrappers.
 
-I find both alternatives distasteful. First `.cjs` and `.mjs` are node specific constructs at the
-moment, and I tend to want to write portable code (to the web). Second, I don't like the proxy-fix
-solution. I can't get TypeScript to auto generate that, meaning I have to have a codebase for it.
+I find both alternatives distasteful. First using `.cjs` and `.mjs`, which are node specific
+constructs at the moment and not portable, does little to solve the state issue, it just makes it
+more explicitly for the library developer. The library user only sees exports, and has no better
+knowledge of it. The second alternative is a hack, and requires the library user to build in `cjs`
+so more or less negates any benefits from that perspective.
 
 The true dual package solution from the same code simply requires discipline and the willingness
 that in very rare cases a deep dependency might be using the 'other' module loader for the same
@@ -50,20 +61,36 @@ alternatives are there and this tutorial still applies.
 
 ## Pre-requisites
 
-The version of node should cover the functionality from node desired. Except for the oldest of
-legacy projects this should not an issue as current stable version is 18+. We'll also see that
-proper module and moduleResolution settings make code version proof to future Node releases.  
-For legacy projects, advanced package.json features began appearing around Node 16 and you're out of
-luck for those features if you are using something earlier.
+### Node.js
 
-The version of Typescript recommend is at 4.9+ to ensure NodeJS 18+ compatibility. Earlier
-versions (for example 4.6) did not fully enable some of the features, and the documentation lagged
-for severa minor versions. However, 4.9 is "golden" on the integration and documentation.
+Node.js v18+ is recommended. Many of the node features were available as of v.16 or earlier, if you
+must operate in an unsupported environment refer to the Node.js documentation, which is pretty good
+at identifying concept introduction (as opposed to TypeScript documentation, which is often not in
+sync with new codebase features).
+
+Key Node.js features we're covering in this tutorial:
+
+- ECMAScript modules
+- module type
+- exports
+- imports
+- self-referencing
+
+### TypeScript
+
+The version of Typescript recommend is at 4.9+ to ensure NodeJS 18+ compatibility. Earlier versions
+either did not enable those features, or at the time the documentation did not match the features.
+4.9 is "golden" on the integration and documentation.
+
+### TypeScript Composite Projects
 
 If you're not familiar with TypeScript composite projects, it is strongly recommended you
-familiarize yourself. There are several advantages to composite project not the least of which is to
-easily transpile multiple subprojects within a repository, however this topic is beyond the scope of
-the tutorial.
+familiarize yourself, though not required for this tutorial. There are several advantages to
+composite project not the least of which is to easily transpile multiple subprojects within a
+repository, and with the advances in package.json, the ability to leverage those in an easier
+manner.
+
+## Reference Documentation
 
 It's recommended to get familiar with the following Node documentation chapters before or after
 reading this tutorial. Much of the information there is repeated here in some manner, but those
@@ -76,6 +103,19 @@ chapters are the authoritative source:
 The following TypeScript documentation page is also an important read:
 
 - [ECMAScript Modules in Node.js](https://www.typescriptlang.org/docs/handbook/esm-node.html)
+
+## A note on packages
+
+Depending on how often you build packages, you may only be familiar with the standard format of
+having a repos package.json that generally is used as the source for the distribution package.json.
+
+However, package.json and Node.js are much more versatile than that. In many repos the repos
+package.json configures the basics, and supports a development experience, for example with bin
+commands for development. A distribution package.json may have settings different from the repos
+package.json. In both cases, sub-packages may exist that alter code behavior
+
+As we move from `cms` to `ems` there is a strong pressure to better understand package.json ins and
+outs.
 
 ## Review of CommonJS and ECMAScript Modules
 
@@ -92,10 +132,11 @@ Node.js introduced two typescript file extensions, `.cjs` and `.mjs`. The `.cjs`
 always implement a `cjs` module, and likewise the `.mjs` extension must always implement an
 `esm` module or a run time error will be produced.
 
-Typescript will properly transpile the corresponding `.cts` and `.mts` files to the correct output.
+Typescript will properly transpile the corresponding `.cts` and `.mts` files to the correct output
+and complain if it finds inconsistencies.
 
 `.js` files are ambiguous and can be either `cjs` or `esm` modules, and interpreted depending on the
-code the contain to import and export modules, among other things. Thus the `.ts` is also ambiguous.
+how the code exports and imports within the file. Thus the `.ts` extension is also ambiguous.
 TypeScript, however as of v4.9, does not always provide compilation errors, as we'll see later, even
 if the `module` compilerOption conflicts with the configured `package. json`.
 
@@ -123,65 +164,88 @@ Node.js world.
 | JSON imports                                                      |        const package = require('[blah].json`)        | import package from '[blah].json] assert{type:'json'} |
 | Requires relative imports use file extension `.js`, `cjs`, `.mjs` |                       Optional                       |                       Required                        |
 
-### TypeScript Implications
+### Typescript Import Implications
 
-Always try to use `import` in TypeScript. The compilerOption `esModuleInterop` will often
+Always try to use `import` to import in TypeScript. The compilerOption`esModuleInterop` will often
 automatically allow that syntax in TypeScript when importing `cjs` modules for both default and
-named exports.
+named exports and should be turned on unless you really want to flag at dev time that a module is
+commonjs as a way to avoid using it.
 
 There are legacy cases where the module.exports conventions are violated, potentially re-mapping
-exports for example. In those cases, TypeScript (and JavaScript) will require the use of the
-module.createRequire function, which provides a require function to load`cjs` modules. In practice,
-Lif you an import error it will likely mean you should use this technique. If it still fails, there
-are other issues with your code or environment.
+exports for example. In those cases, TypeScript (and JavaScript) may require the use of the
+module.createRequire function, which provides a require function to load`cjs` modules from `esm`
+modules. Often if an import error occurs statically in your IDE or through tsc it will likely mean
+you should use this technique. This is particularly true of older legacy libraries, when JavaScript
+developers tended to be creative with exports.
+
+Using `.ts` extensions is more portable than using `.cts` or `.mts` extensions. This requires
+consideration of the package `type` property, along with the `module` and
+`moduleResolution` compilerOptions (further discussed laterCR).
+
+### The truth about `cjs` loading `esm` modules
 
 The notion that `cjs` modules cannot load `esm` modules is not entirely true.  `cjs` can load
 `esm` through the dynamic import() function. Types can be defined using `import type {blah} from '
-blah'` for static typings, and with this line of code removed during compilation. Note that the 
-same can be done in `esm` modules to create conditional imports.
+blah'` for static typings, and with this line of code removed during compilation. Note that the same
+can be done in `esm` modules to create conditional imports.
 
-Using `.ts` extensions is more portable than using `.cts` or `.mts` extensions. This requires 
-consideration of the package `type` property, along with the `module` and 
-`moduleResolution` compilerOptions (further discussed laterCR).
+At first it may feel like a hack, but it is a very useful technique to know, and it is a node.js
+feature. Since it is supported by browsers, in addition to general dynamic imports, it can be used
+to make code more portable.
+
+For the TypeScript developer, the key is knowing how to import types as well as code
+and `import type` syntax is used for that purpose. The `import type` syntax is not supported by
+JavaScript, but is removed by tsc.
+
+Depending on whether one is importing the default export or a named export, the syntax is slightly
+different.
+
+```typescript
+import type {MyType} from 'importIdentifier';
+
+import('importIdentifier').then(({default: MyType}) => {
+  // do something with MyType
+});
+```
+
+Note:  TypeScript complains if you write a module with a dynamic import leveraging `import type`
+and also import that type normally using `import`. Design accordingly.
 
 ### __dirname and __filename
 
-The module object in `esm` can be used to obtain the file URL and thus the derive the same 
-`__dirname` and `filename` properties as `cjs` modules. Another 'technique' is to create a 
-collocated __dirname.cjs and __filename.cjs in the current folder where needed, export the value 
-and import it into the `esm` module. This is a hack, but it works and providing it here to show 
-how we can use different module types to achieve various effects.
-
-
+The module object in `esm` can be used to obtain the file URL and thus derive the same
+`__dirname` and `filename` properties as `cjs` modules from the URL. Another 'technique' is to
+create a collocated __dirname.cjs and __filename.cjs in the current folder where needed, export the
+value and import it into the `esm` module. This is a hack, but it works and providing it here to
+show how we can use different module types to achieve various effects.
 
 ## Usage of `.js`/`.ts`, `.cjs`/`.cts` and `.mjs`/`.mts` extensions
 
-One motivation for this tutorial is to continue to use `.js` and more importantly `.ts` extensions
-and share that source without concern as to where it is used (client side, `esm` or `cjs`).
+This tutorial recommends keeping with `.js` and `.ts` extensions for portable coding. Use the other
+extensions when you know purposefully that you won't have portable code, and where you specifically
+want to override the package's default module system, since specifying the module type extension
+will ** always ** result in Node.js attempting to load that module type.
 
-Node.js documents a known risk with taking this approach for dual repos. A client could
-inadvertently use both the `cjs` and `esm` versions of a package, and the behavior would be
-potentially unpredictable. At the very least, module level state (var, let, const) could be
-different between the two.
+When using `esm` you must include the JavaScript form of the extension in your relative import
+statements. For example, if you have a file named `foo.ts` and you want to import it into a file
+named  'bar.ts' you must use the following syntax:
 
-This tutorial rationalizes this risk as follows. If two different libraries leverage a dual package
-through `cjs` and `esm` respectively, the internal state of each and that of the client which may be
-using one or the other should not matter in most cases if inner package exports are not
-re-exported (doing so is rare). The documentation of the library in question (the client in this
-case) should clearly state that the library is dual and that the client should not use both.
+```typescript
+import {foo} from './foo.js';
+```
 
-The recommendation to use `.js` and `.ts` extensions is a recommendation only. You can still use the
-principles of this tutorial and write only `.cjs` and `.mjs` files.
+This is true whether the target import is `esm` or `cjs` and it is always true for dynamic imports
+regardless of module type. It is not true within the `cjs` module system, where
+`.js` is optional, but for portability reasons, it is recommended to always use the `.js`.  
+Modern IDEs complete support this syntax completion and one quickly gets used to it.
 
-Remembering that irrespective of package.json `type` field setting `.cjs` and `.mjs` files are
-always module loaded per their extension. There are times when writing code you may want to actually
-enforce one or the other regardless of the surrounding package.json `type` field setting, and that's
-fine. JavaScript will even allow for an inline require within a `esm` loaded module.
+## tsconfig.json
 
-## tsconfig.json Inheritance
-
-tsconfig.json can explicitly inherit from another tsconfig.json file. This is a powerful feature
-that we will leverage. The following is a simple example of inheritance:
+In going from 'cjs' to 'esm' one will invariably have multiple tsconfig.json files, some of these
+for the same codebase. Typescript is particularly flexible in this regard:  The compiler can be
+provided the exact config file to use, no matter what it is named, and config files can be extended.
+As we think of dual repos, it will be important to leverage these features to simplify the build
+process.
 
 ```json
 {
@@ -199,22 +263,29 @@ x/docs/api/packages.html) and enhanced with some practical examples and commenta
 
 ### Nested package.json files
 
-package.json files are, unfortunately, not inherited. This means that if you have a nested
-package.json it will override the parent package.json. However, this 'feature' can be taken
-advantage of in interesting ways, and we do that in this tutorial.
+package.json files are, unfortunately, not inheritable and cannot be renamed. This means that if you
+have a nested package.json it will override the parent package.json in certain ways that may seem
+inexplicable - certainly I have not found solid documentation on the specifics. However, if we
+follow the documentation on packages in Node.js, we at least know what its intended behavior is, and
+with the help of some testing can understand how it impacts in different ways.
+
+In my exploration of `cjs` to `esm` fully understanding the node.js portions of package.json
+completely revolutionized how I think of code packages and code scaffolding.
 
 As far as Node.js is concerned, a package defined by a package.json file applies as may be the case
-to all files/folders from the current one to the next package.json file.
-
-Code that is in a child package may not refer to code in a parent package, i.e. one cannot import
-from further up than one's own package.json file location. However, code in a parent package may
-access code in a child package [Example]().
+to all files/folders from the current one to the next package.json file in child directories.  
+As we'll discover, this is true in a deployed environment - it is not always true in a development
+environment.
 
 #### Implications of nested package.json files
 
 `.js`files are loaded according to the nearest package.json file's `type` field, NOT to the nearest
 package.json file that _contains_ a `type` field. If the nearest package.json does not contain this
-field, Node.js defaults to `commonjs` module loading[Example]().
+field, Node.js defaults to `commonjs` module loading. This rule holds true in a development
+environment, i.e. when the current package is not deployed to node_modules [Example]().
+
+Typescript honors this rule when properly configured to support Node.js (as we'll see later on, it
+doesn't always honor this rule).)
 
 ### Module resolution algorithm
 
@@ -222,177 +293,440 @@ Module loading on the other hand doesn't work the way package.json works. If you
 module loading algorithms, a module from another package import is resolved by searching for the
 module recursively up through node_modules subdirectories of parent directories all the way back to
 root, or it discovers it is within a node_modules directory itself. A relative module is resolved
-from the package.json root down, but not further up. The presence of new package.json files does not
-inhibit relative imports. [Example]()
+from the package.json root down, but not further up. Moreover, the presence of sub-directory
+package.json files does not inhibit relative imports, but it can still change the default module
+loading system, per the previous section.
+[Example]()
 
 #### Implications of module resolution algorithms
 
 Say you have code in a parent package that is contains `type=module` in its package.json file.  
 Say further that some code in that parent package loads code in a child package that contains
 `type=commonjs` in its package.json file. The code in the parent package will load the child not as
-an `esm` module, but as a `cjs` module. This is because of the configuration of the child package,
-remembering that a package is defined by the nearest package.json file. The interesting thing here
-is that the child package can define how its `.js` files are loaded, but it doesn't prevent the
-parent package from loading it! This is a powerful feature that we will leverage later on, when we
-look at package exports and imports.
+an `esm` module, but as a `cjs` module.
+
+This is because of the configuration of the child package, remembering that a package is defined by
+the nearest package.json file. The interesting thing here is that the child package.json can define
+how its `.js` files are loaded, but it doesn't prevent the parent package from loading it regardless
+of what it defines as exports or imports!  Exports and imports, as we'll see later, are entry points
+of _deployed_ packages, and control imports to other modules when accessed as a package.
+Relative `import` statements can always break through `exports` and `imports`
+declarations in child package.json files.
 
 ## exports and imports
 
-If you're only attempting leveraging exports and imports from TypeScript 4.9 onwards (or
-thereabouts), consider yourself lucky. Earlier versions were not consistent with node.js package.
-json changes, nor was the documentation clear. There were also bugs, such as the insertion of
-`export {}`into .cjs from transpilation of .cts, which was considered a "feature" at the time.
+`exports` and `imports` provide package entry points and work in very much the same way.  
+`exports` is for the outside world, while `imports` is for the inside world, i.e. the package. The
+package can also import exports using self-referencing (described later).
 
-`exports` and `imports` were in very much the same way.  `exports` is for the outside world,
-while `imports` is for the inside world, i.e. the package. The package can also import using
+A nuance is that if a package contains a subdirectory package.json, the imports and exports of that
+sub-directory package.json are not available as relative imports to the parent package.  
+(If the subdirectory package is installed to the node_modules hierarchy, then the parent package can
+import it as a regular package). The parent package can, however point to subdirectory package paths
+for its exports, noting that the subdirectory package `types` field will determine the default
+module system for `.js` files in that subdirectory.
+
+### exports
+
+Think of exports as mapping logical paths to physical paths. The Node.js documentation does a great
+job of explaining the possibilities, and the TypeScript documentation further provides a more
+concrete example.
+
+Typically, the construct of an export is:
+
+"[logical path]": "[physical path]"
+
+The logical path must always start with a ".", and the "." logical path means "everything". If you
+have other logical paths, you can list them after the "." main path. (You can also not provide a
+main path).
+
+From the importer's perspective, they are now import not from a module directly, but form a logical
+path. When you think of it, this is no different than importing from "index.js".
+
+```JSON
+{
+  "name": "my-package",
+  "exports": {
+    ".": "./dist/index.js",
+    "./lib": "./dist/lib"
+  }
+}
+```
+
+```TypeScript
+import {foo} from "my-package";
+import {bar} from "my-package/lib";
+```
+
+### Conditional exports
+
+The [physical path] can include a conditional statement, which indicates to use paths based on
+matching conditions. Node.js indicates which conditions are currently supported, and they include:
+
+- import (the caller is using the JavaScript `import` keyword)
+- require (the caller is using the JavaScript `require` keyword)
+- default (generic fallback, and Node.js indicates it should always be last)
+- node (advanced usage)
+- node-addons (very advanced usage)
+
+Nested conditions can be used (conditions that then have sub-conditions or subpaths to sub
+conditions) (rare to need it).
+
+Moreover, Node.js currently supports typescript with the "types" condition, which must always be
+provided first.
+
+In addition to "deno", "browser", "react-native", "development", "production".  
+These are beyond the scope of this tutorial.
+
+```JSON
+{
+  "name": "my-package",
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.js"
+    },
+    "./lib": {
+      "require": "./dist/lib.cjs",
+      "import": "./dist/lib.mjs",
+      "default": "./dist/lib.js"
+    }
+  }
+}
+```
+
+In the above configuration, you see for the first time how to construct a dual-package. The method
+here is code intensive - providing different entry implementations for different module loading
+systems. It is not recommended for portability reasons.
+
+### Single exports
+
+When there is only one exports, i.e. index.js, exports can be shortened to a name value pair, i.e.
+
+```JSON
+{
+  "name": "my-package",
+  "exports": "./dist/index.js"
+}
+```
+
+### types
+
+If we want to specify where types are kept other than collocated with JavaScript output, we can
+define that for each export.
+
+As we already know, there is a top level `types` field in package.json. When defining `exports`
+in its simple form we can use this `types` field.
+
+```JSON
+{
+  "name": "my-package",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js"
+}
+```
+
+When defining `exports` in its complex form, we can use the `types` field in the exports _for each
+sub-path_.
+
+```JSON
+{
+  "name": "my-package",
+  "exports": {
+    ".": {
+      "types": "./dist/type/index.d.ts",
+      "require": "./dist/index.js"
+    },
+    "./lib": {
+      "types": "./dist/lib/types/index.d.ts",
+      "require": "./dist/lib/index.js"
+    }
+  }
+}
+```
+
+Although not documented, if all the types are in the same types directory, we can use the top
+level `types` field for all exports and imports. This currently works but as TypeScript
+documentation indicates, it is primarily to support older versions of TypeScript.
+
+### Self-referencing exports
+
+Self referencing is a Node.js feature that allows a file in a package to self-reference it's package
+exports and imports for in the `import` construct, rather than using relative paths. It is fully
+supported by TypeScript at build time.
+
+Whether one leverages this feature or not for most of the source files is a matter of preference,
+noting that some IDEs don't eyt fully bring in the type information when self-referencing is used.
+For example as of this writing Webstorm 2023.1 does bring in the type information in general, but
+not in every manner (hove over etc.) and color coding may be missing.
+
+One place where self-referencing is immensely useful is for testing scaffolding. T
+
+Consider the following scaffolding:
+
+- repos package
+  - project package
+    - package.json for project (testing package)
+    - src (named "dist" in compiled output)
+      - package.json for my-package (distributed package)
+      - index.ts
+    - test
+      - index.test.ts
+
+The project package.json might look like this:
+
+  ```JSON
+  {
+  "name": "project",
+  "exports": {
+    "./project": "./dist/index.js",
+    "./project/sub-module": "./dist/sub-module.js"
+  }
+}
+  ```
+
+While the my-package package.json might look like this:
+
+  ```JSON
+  {
+  "name": "my-package",
+  "exports": {
+    ".": "./dist/index.js"
+  }
+}
+  ```
+
+Now our testing Typescript can import from 'project' or 'project/sub-module' instead of attempting
+relative paths to output folders.
+
+  ```TypeScript
+import {foo} from 'project';
+import {bar} from 'project/sub-module';
+  ```
+
+Although this works it is a nuance to note that package and my-package are considered distinct
+packages per what we discussed earlier. As we saw, it just so happens that package.json in a
+subdirectory does not stop a parent directory package.json from exporting its files - it only
+controls the default module type.
+
+The novice may be tempted to put a package.json in the testing directory, but this would be a
+breaking mistake. Remembering that exports cannot be inherited by sub-directory packages, and that
+they are different packages altogether, the test files would have no knowledge of 'my-package' for
 self-referencing.
 
-| Feature                               | exports | imports | 
-|---------------------------------------|---------|---------|
-| can begin with conditional expression |         |         |
-|                                       |         |         |
-|                                       |         |         |
+Likewise, the source files in 'src' have no knowledge of package and only can self-reference to the
+my-package level.
 
-The node.js and TypeScript documentation do a good job of explaining exports and imports, with a
-logical path mapping to a physical path relative to the package.json file, potential with a
-conditional mapping in the mix.
+### Additional TypeScript support for self-referencing
 
-One quirk is that exports have no effect in relative imports that cross package lines. They only
-take effect in the context of an installed node_modules dependency. This is a quirk because it is
-not consistent with the `type`
-field, which does have an effect on relative imports that cross package lines.
+Interesting, at dev time (source), TypeScript supports package.json exports and imports to `.ts`,
+`.mts` and `.cts` files. I have not found documentation on this, but it does work. Of course that
+means a build step is needed to remap to `.js` files for runtime package.json.
 
-This quirk can cause issues, because it means that exports and imports are not of use until the
-package is installed. This quirk will show up as an issue later in this tutorial.
+### imports
 
-### Did you know that you can export `.ts` files?
+We left imports for last, because everything stated for exports works for imports except:
+
+- imports logical paths must start with `#`
+- imports are ony usable from self-referencing
+
+For the above reasons, one practice is to use import from package `imports` for tests rather that
+package `exports`. It enforces localization to the package, but IMO this is mostly stylistic.
+
+```json
+{
+  "name": "package",
+  "imports": {
+    "#project": "./dist/index.js",
+    "#project/sub-module": "./dist/sub-module.js"
+  }
+}
+```
+
+  ```TypeScript
+import {foo} from '#project';
+import {bar} from '#project/sub-module';
+  ```
 
 ## Important tsconfig.json and package.json compiler options for dual repos
 
 When troubleshooting target, module and moduleResolution compiler options, it is important to
-remember that the runtime result will always behave according to Node.js documented rules. If
-something throws a module not found error or similar, its because `tsc` is transpiling something
-inconsistent.
+remember that the runtime result will always behave according to Node.js documented rules. Because
+of this its important to understand how TypesScript options affect generate JavaScript  
+modules
 
-`target` compilerOption:  responsible for the generated JavaScript to language specification, but
-does not insert module loading related code (i.e. the transpilation of `import` and `export`
-statements).
+### `target` compilerOption  
 
-It is important to remember that it defaults to es3 at least for TypeScript 4.9 and earlier. Also,
-interestingly while `esm` module loading was not available when es3 was predominant, it is possible
-to use `esm` module loading with es3 target, based on settings below.
+Responsible for the generated JavaScript to language specification, but
+  does not insert module loading related code(i.e.the transpilation of`import` and `export`
+  statements). It is important to remember that it defaults to es3 at least for TypeScript 4.9 and
+  earlier.Also, interestingly while `esm` module loading was not available when es3 was predominant,
+  it is possible to use`esm` module loading with es3 target, based on settings below.
 
-`module` compilerOption: responsible for the generated `.js` from `.ts` `import` and `export`
-statements.  `.cts` and `.mts` will always result `.cjs` and `.mjs` respectively with module loading
-governed by the convention on those extensions (i.e. the code you write). Note that in this tutorial
-we ignore `amd`, `umd` and `system`module loading.
+### `module` compilerOption 
 
-A setting of anything other than `commonjs`, `Node16` or `NodeNext` will result `esm` module
-loading, i.e. `import` and `export` statements, including if the original language spec and Node. js
-at the time did not support it (see comment above on es3). Typescript ignores the package.json`type`
-field, which if set to `commonjs` will cause a runtime error.
+Responsible for the generated`.js` from`.ts``import` and`export` 
+  statements.`.cts` and`.mts` will always result`.cjs` and`.mjs` respectively with module 
+  loading governed by the convention on those extensions(i.e.the code you write ). Note that in 
+  this tutorial we ignore`amd`, `umd` and`system` module loading. A setting of anything other 
+  than`commonjs`, `Node16` or`NodeNext` will result`esm` module loading , i.e.`import` 
+  and`export` statements, including if the original language spec and Node.js at the time did not support it(see
+comment above on es3). Typescript ignores the package.json`type` field, which if set 
+  to`commonjs` will cause a runtime error.A setting of`commonjs` will always result in `cjs`
+ module loading , i.e.`require`
+and`module. exports`.Typescript ignores the package.json`type`
+field, which if set to
+`module`
+will cause a runtime error.A setting of`Node16`
+or`NodeNext`
+will result in either`esm`
+or`cjs`
+module loading , and here the TypeScript compiler will look to the package.json`type`
+field to determine which, remembering that its absense implies`commonjs`.Note that a value
+of`Node16`
+or`NodeNext`
+will
+_not_
+result in node.js package.json features such as project self - referencing being recognized by the
+typescript compiler(as of 4.9
+). It simply influences the generated code for module loading.
 
-A setting of `commonjs` will always result in `cjs` module loading, i.e. `require`
-and `module. exports`. Typescript ignores the package.json `type` field, which if set to
-`module` will cause a runtime error.
+`moduleResolution`
+compilerOption: responsible for allowing TypeScript to recognize the package.json advanced features
+such as project self - referencing.As far as can be seen, that
+'s pretty much its only use.It does not affect the generated code at all.One might think that the
+TypeScript engineers would have been better off simply detecting what was in package.json, and
+providing automatic compatibility.The documentation says
+"'node16' or 'nodenext' for Node.js’ ECMAScript Module Support from TypeScript 4.7 onwards
+", however as far as I can tell tsc supports `.cts`
+and`.mts`
+and`esm`
+module loading without this moduleResolution setting.
 
-A setting of `Node16` or `NodeNext` will result in either `esm` or `cjs` module loading, and here
-the TypeScript compiler will look to the package.json `type` field to determine which, remembering
-that its absense implies `commonjs`.
+`esModuleInterop`
+compilerOption: allows TypeScript code to use`import`
+to load`cjs`
+modules in `esm`
+modules.Without it, one has to create a require
 
-Note that a value of `Node16`or  `NodeNext` will _not_ result in node.js package.json features such
-as project self-referencing being recognized by the typescript compiler (as of 4.9). It simply
-influences the generated code for module loading.
+function using
 
-`moduleResolution` compilerOption: responsible for allowing TypeScript to recognize the package.
-json advanced features such as project self-referencing. As far as can be seen, that's pretty much
-its only use. It does not affect the generated code at all. One might think that the TypeScript
-engineers would have been better off simply detecting what was in package.json, and providing
-automatic compatibility. The documentation says "'node16' or 'nodenext' for Node.js’ ECMAScript
-Module Support from TypeScript 4.7 onwards", however as far as I can tell tsc supports `.cts`
-and `.mts` and `esm` module loading without this moduleResolution setting.
+module.createRequire, which itself creates non - portable code.There are times when this is still
+necessary, as TypeScript cannot infer all cases to`import`
+from a`cjs`
+module.Given that there is no harm done in using this compilerOption, it is recommended to always
+use it for cleaner code.
 
-`esModuleInterop` compilerOption: allows TypeScript code to use `import` to load `cjs` modules
-in `esm` modules. Without it, one has to create a require function using module.createRequire, which
-itself creates non-portable code. There are times when this is still necessary, as TypeScript cannot
-infer all cases to `import` from a `cjs` module. Given that there is no harm done in using this
-compilerOption, it is recommended to always use it for cleaner code.
+###
 
-### Recommendations
+Recommendations
 
-| Purpose      | target |     module     | moduleResolution |      esModuleInterop       |        package.json type         |
-|--------------|:------:|:--------------:|:----------------:|:--------------------------:|:--------------------------------:|
-| script       | EsNext | None or ESNext | None or NodeNext |            true            | module (if package.json present) |
-| node library | EsNext |    NodeNext    |     NodeNext     |            true            |              module              |
-| web          | ESNext |     ESNext     |       Node       | true if `cjs` is supported |              module              |
+| Purpose | target | module | moduleResolution | esModuleInterop | package.json
+type | | -------------- |
+:
+------
+:|:
+--------------
+:|:
+----------------
+:|:
+--------------------------
+:|:
+--------------------------------
+:| | script | EsNext | None or ESNext | None or NodeNext | true | module(
+if package.json present
+) | | node library | EsNext | NodeNext | NodeNext | true | module | | web | ESNext | ESNext | Node |
+true if `cjs` is supported | module |
 
-## Putting it all together - deploying dual (or more) packages
+##
 
-At this point it may be clear that deploying dual packages involves leveraging conditional exports.
-Coming from typescript, we can easily generate the appropriate target for require and import.
+Putting it all together - deploying dual(or more
+)
+packages
 
-We also know that the default package.json node behavior is to assume `cjs` module. At this point we
-realize that with one package.json over a distribution, we cannot achieve a dual deployment, since
-node.js will _always_ result in `cjs` OR `esm`.
+At this point it may be clear that deploying dual packages involves leveraging conditional
+exports.Coming from typescript, we can easily generate the appropriate target for require and
+import.
 
-So its seems that one solution means that we will need to wrap our code with either `.cts`
-or  `.mts` files, which enforce the other condition. Of course, due to what we learned, the choice
-is to wrap the code with `.mts`, generating `.mjs` wrappers, since `.mjs` files can load both
-`cjs` without the use of dynamic `import()` statements.
+We also know that the default package.json node behavior is to assume`cjs`
+module.At this point we realize that with one package.json over a distribution, we cannot achieve a
+dual deployment, since node.js will
+_always_
+result in `cjs`
+OR`esm`.So its seems that one solution means that we will need to wrap our code with either`.cts`
+or`.mts`
+files, which enforce the other condition.Of course, due to what we learned, the choice is to wrap
+the code with `.mts`, generating`.mjs` wrappers, since`.mjs`
+files can load both
+`cjs`
+without the use of dynamic`import()`
+statements.Not so fast.There is a better way.We also know that a package.json impacts module loading
+for all code at its level down - whether it is a deployed package, and that exports paths transcend
+sub - packages(you can export child code from a parent package
+).
 
-Not so fast. There is a better way. We also know that a package.json impacts module loading for all
-code at its level down - whether it is a deployed package, and that exports paths transcend
-sub-packages (you can export child code from a parent package).
-
-With this knowledge, we can defer the setting of the package.json `type` field to the last possible
-level, right before the destination source:
+With this knowledge, we can defer the setting of the package.json`type`
+field to the last possible level, right before the destination source:
 
 In preparing our package for deployment, we create a deployment package as usual with an incremental
-version. Common practice is simply to copy the repos' package.json with a new version number, but
-this is _common practice_ only. In fact, you probably already massage that package.json, for example
-removing scripts or bin entries that matter only for development.  (You should also take the
-opportunity to remove all devDependencies entries and anything else you don't want in the published
-version).
+version.Common practice is simply to copy the repos
+' package.json with a new version number, but this is
+_common practice_
+only.In fact, you probably already massage that package.json, for example removing scripts or bin
+entries that matter only for development.(You should also take the opportunity to remove all
+devDependencies entries and anything else you don
+'t want in the published version
+).
 
-Our distribution package.json will not have a `type` field. This means that any code in its package
-will be commonjs, i.e. `cjs`   module loading. But we will not put our code there.  
-Instead, we will define two sub-packages, one for `cjs` and one for `esm`. For each of these, we
-only need one property:  `type`, set to the appropriate value. We already know this will force code
-at those levels to be `esm` or `cjs` respectively.
+Our distribution package.json will not have a`type`
+field.This means that any code in its package will be commonjs, i.e.`cjs`
+module loading. But we will not put our code there.Instead, we will define two sub - packages, one
+for `cjs` and one for `esm`.For each of these, we only need one property:  `type`, set to the
+appropriate value.We already know this will force code at those levels to be`esm`
+or`cjs`
+respectively.In our distribution package.json, we will set whatever exports we want under the
+conditional module loading sub - paths.There are so many options ...
 
-In our distribution package.json, we will set whatever exports we want under the conditional module
-loading sub-paths. There are so many options...
+-We can say that require and import always
 
-- We can say that require and import always result in loading their respective generate index.js,
-  where everything is necessary is exported from the codebase.
-- We can be more specific in what modules require and import can load.
+result in loading their respective generate index.js, where everything is necessary is exported from
+the codebase.
+
+- We can be more specific in what modules require and import can
+
+load.
+
 - We can be specific about what modules can be loaded and then pass through require and import
-  conditions.
-- etc.
-- ** We can also define new distribution logical paths to export additional targets **. For example
-  say my default distribution for `esm` is generated from `"module"="esnext"`,
-  `"target"="esnext"`, `"moduleResolution"="Node"` and for `cjs` is generated from
-  `"module"="commonjs"`, `"target"="esnext"`, `"moduleResolution"="NodeNext"`, then these would map
-  to my code in the `esm` and `cjs` sub-packages respectively. But say I also wanted to target a
-  very backward `es3` target. In that case I could have an `exports` entry called
-  `./es3` and target that with conditional imports and exports.
+  conditions
 
-The distribution scaffolding would look something like this:
+. -etc.
+
+-
+  *
+    * We can also define new distribution logical paths to export additional targets **. For example
+      say my default distribution for `esm` is generated from`"module"="esnext"`,
+      `"target"="esnext"`, `"moduleResolution"="Node"`
+      and for `cjs` is generated from
+      `"module"="commonjs"`, `"target"="esnext"`, `"moduleResolution"="NodeNext"`, then these would
+      map to my code in the`esm`
+      and`cjs`
+      sub - packages respectively.But say I also wanted to target a very backward`es3`
+      target.In that case I could have an`exports`
+      entry called
+      `./es3`
+      and target that with conditional imports and exports.The distribution scaffolding would look
+      something like this
+      :
 
 ```` 
+
 dist ─┬─ package.json  [Distribution package.json, with no type field, but appropriate exports]
-      │
-      ├─ cjs ─┬─ package.json [Output folder for commonjs transpiled code]
-                 types ─┬─ index.d.ts
-      │          index.js
-      │
-      ├─ mjs ─┬─ package.json [Output folder for esm transpiled code, package.json contains "type"="module]  
-      │
-                 index.js
-      ├─ es3  ─┬─ cjs ...
-               ├─ mjs ...
-      ├─ bin  ─┬─ mjs (supports only mjs 
-     
+│ ├─ cjs ─┬─ package.json [Output folder for commonjs transpiled code]
+types ─┬─ index.d.ts │ index.js │ ├─ mjs ─┬─
+package.json [Output folder for esm transpiled code, package.json contains "type"="module]  
+│ index.js ├─ es3 ─┬─ cjs ... ├─ mjs ... ├─ bin ─┬─ mjs (supports only mjs
+
 ````
 
 ### Development Consequences
