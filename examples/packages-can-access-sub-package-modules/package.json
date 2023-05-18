@@ -1,0 +1,21 @@
+{
+  "name": "some-package",
+  "version": "0.0.1",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FranzZemen/.git"
+  },
+  "author": "Franz Zemen",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/FranzZemen//issues"
+  },
+  "homepage": "https://github.com/FranzZemen/readme",
+  "dependencies": {+natna
+  }
+}

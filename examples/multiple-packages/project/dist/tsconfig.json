@@ -1,0 +1,7 @@
+{
+  "files": [],
+  "include": [],
+  "references": [
+    {"path": "./examples/ex-1-cjs-mjs/src/tsconfig.json"},
+  ]
+}
